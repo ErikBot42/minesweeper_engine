@@ -1,6 +1,5 @@
 use super::{surrounding, GameBoard, Index2D};
 
-
 #[derive(Copy, Clone, Debug)]
 struct Constraint {
     count: i8,
@@ -38,10 +37,7 @@ impl Constraint {
     }
 }
 
-// mark square as mine
-// if condradiction => it is safe
-
-// if mine/safe is added at (x,y) is the system still consistent?
+/// if a mine/safe is added at (x,y) is the system still consistent?
 fn check_consistent(
     constraints: &mut Vec<Vec<Option<Constraint>>>,
     mine: &mut Vec<Vec<Option<bool>>>,
@@ -52,11 +48,6 @@ fn check_consistent(
     let Some(&(x, y)) = border.get(idx) else {
         return true;
     };
-    // i/o args:
-
-    //let mut constraints: Vec<Vec<Option<Constraint>>> = Vec::new();
-    // monad -> do we know state of variable?
-    //let mut mine: Vec<Vec<Option<bool>>> = Vec::new();
 
     match mine.index_2d_mut(x, y) {
         m @ None => *m = Some(set_mine),
@@ -64,8 +55,6 @@ fn check_consistent(
     };
 
     let mut valid = true;
-
-    //*mine.index_2d_mut(x, y) = Some(set_mine);
 
     for (x, y) in surrounding(x, y) {
         if let Some(Some(constraint)) = constraints.get_2d_mut(x, y) {
@@ -115,72 +104,131 @@ pub fn play(board: GameBoard) {
 
     use std::collections::HashSet;
 
-    // let mut active_constraints: HashSet<(usize, usize)> = HashSet::new();
-
-    // active_constraints.insert((initial_x, initial_y));
-    
     let mut guess_made = true;
     while guess_made {
         guess_made = false;
         board.reset_write_head();
-        {
-            let mut border: HashSet<(usize, usize)> = HashSet::new();
 
-            for y0 in 0..board.height {
-                for x0 in 0..board.height {
-                    // for each unkunknown
-                    if let Some(&None) = mines.get_2d(x0, y0) {
-                        for (x, y) in surrounding(x0, y0) {
-                            if let Some(&Some(_)) = constraints.get_2d(x, y) {
-                                border.insert((x0, y0));
-                            }
-                        }
+        if board.display {
+            println!("fast pass             ");
+        }
+        for (x_unknown, y_unknown) in board.forall() {
+            let Some(&None) = mines.get_2d(x_unknown, y_unknown) else {
+                continue;
+            };
+            for (x_constraint, y_constraint) in surrounding(x_unknown, y_unknown) {
+                if let Some(&Some(constraint)) = constraints.get_2d(x_constraint, y_constraint) {
+                    if constraint.remaining_safe() {
+                        make_guess(
+                            &mut board,
+                            &mut mines,
+                            &mut constraints,
+                            x_unknown,
+                            y_unknown,
+                            false,
+                        );
+                        guess_made = true;
+                        break;
+                    } else if constraint.remaining_mines() {
+                        make_guess(
+                            &mut board,
+                            &mut mines,
+                            &mut constraints,
+                            x_unknown,
+                            y_unknown,
+                            true,
+                        );
+                        guess_made = true;
+                        break;
+                    } else {
                     }
                 }
             }
+        }
+        board.reset_write_head();
 
-            let mut border: Vec<(usize, usize)> = border.into_iter().collect();
-            border.sort();
-            let border_len = border.len();
+        if guess_made {
+            continue;
+        }
 
-            for (x_unknown, y_unknown) in border.iter().copied() {
-                let Some(&None) = mines.get_2d(x_unknown, y_unknown) else {
+        let borders = {
+            let mut iter = board.forall();
+
+            let mut in_any_border = vec![vec![false; board.width]; board.height];
+
+            let mut borders = Vec::new();
+
+            while let Some((x0, y0)) = iter.next() {
+                if in_any_border[y0][x0] {
+                    continue;
+                }
+                // start at unknown
+                let Some(&None) = mines.get_2d(x0, y0) else {
                     continue;
                 };
-                for (x_constraint, y_constraint) in surrounding(x_unknown, y_unknown) {
-                    if let Some(&Some(constraint)) = constraints.get_2d(x_constraint, y_constraint)
-                    {
-                        if constraint.remaining_safe() {
-                            make_guess(
-                                &mut board,
-                                &mut mines,
-                                &mut constraints,
-                                x_unknown,
-                                y_unknown,
-                                false,
-                            );
-                            guess_made = true;
-                            break;
-                        } else if constraint.remaining_mines() {
-                            make_guess(
-                                &mut board,
-                                &mut mines,
-                                &mut constraints,
-                                x_unknown,
-                                y_unknown,
-                                true,
-                            );
-                            guess_made = true;
-                            break;
-                        } else {
+                let mut any_surrounding_constraint = false;
+                for (x, y) in surrounding(x0, y0) {
+                    if let Some(&Some(_)) = constraints.get_2d(x, y) {
+                        any_surrounding_constraint = true;
+                    }
+                }
+                if !any_surrounding_constraint {
+                    continue;
+                }
+
+                // stack, border contains unknown variables
+                let mut stack = Vec::new();
+                let mut border: HashSet<(usize, usize)> = HashSet::new();
+                stack.push((x0, y0));
+
+                while let Some((x, y)) = stack.pop() {
+                    if border.contains(&(x, y)) {
+                        continue;
+                    }
+                    border.insert((x, y));
+                    for (constraint_x, constraint_y) in surrounding(x, y) {
+                        if matches!(
+                            constraints.get_2d(constraint_x, constraint_y),
+                            Some(&None) | None
+                        ) {
+                            continue;
+                        }
+                        for (unknown_x, unknown_y) in surrounding(constraint_x, constraint_y) {
+                            if matches!(mines.get_2d(unknown_x, unknown_y), Some(&Some(_)) | None) {
+                                continue;
+                            }
+                            stack.push((unknown_x, unknown_y));
                         }
                     }
                 }
+                let mut border: Vec<(usize, usize)> = border.into_iter().collect();
+                border.sort();
+                for (x, y) in border.iter().copied() {
+                    in_any_border[y][x] = true;
+                }
+                borders.push(border);
             }
 
+            borders.sort_unstable_by_key(|b| b.len());
+            borders
+        };
+
+        for (i, mut border) in borders.into_iter().enumerate() {
+            let c = [
+                'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p',
+                'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+            ][i % 26];
+
+            for b in border.iter().copied() {
+                board.draw(b.0, b.1, format!("{c}"));
+            }
+            let border_len = border.len();
+
             for i in 0..border_len {
-                board.reset_write_head();
-                println!("{} / {}             ", i+1, border_len);
+                if board.display {
+                    board.reset_write_head();
+                    println!("{} / {}             ", i + 1, border_len);
+                }
                 if border.len() != 0 && mines.index_2d(border[0].0, border[0].1).is_none() {
                     let x = border[0].0;
                     let y = border[0].1;
@@ -188,7 +236,7 @@ pub fn play(board: GameBoard) {
                     if !check_consistent(&mut constraints, &mut mines, 0, &border, true) {
                         make_guess(&mut board, &mut mines, &mut constraints, x, y, false);
                         guess_made = true;
-                        //active_constraints.insert((x, y));
+
                     // would it be inconsistent if there was no mine here => safe
                     } else if !check_consistent(&mut constraints, &mut mines, 0, &border, false) {
                         make_guess(&mut board, &mut mines, &mut constraints, x, y, true);
@@ -198,20 +246,16 @@ pub fn play(board: GameBoard) {
                 let first = border.remove(0); // can be replaced with clever swap
                 border.push(first);
             }
-
-            //break;
-
-            // fn check_consistent(
-            //     constraints: &mut impl Index2D<Option<Constraint>>,
-            //     mine: &mut impl Index2D<Option<bool>>,
-            //     idx: usize,
-            //     border: &[(usize, usize)],
-            //     set_mine: bool,
-            // ) -> bool {
+            if guess_made {
+                break;
+            }
         }
-        std::thread::sleep(std::time::Duration::from_secs_f64(0.1));
     }
-    println!("{} squares remaining with unknown state", board.remaining);
+    println!(
+        "{} squares ({}%) remaining with unknown state",
+        board.remaining,
+        board.remaining as f64 / (board.width as f64 * board.height as f64)
+    );
 }
 
 fn make_guess(
@@ -255,69 +299,3 @@ fn make_guess(
         }
     }
 }
-
-/*fn play_simple(board: GameBoard) {
-    let mut board = board;
-
-    let mut state = vec![vec![Unknown; board.width]; board.height];
-
-    let (initial_x, initial_y) = board.initial();
-    state[initial_y][initial_x] = Element::from_query(board.query(initial_x, initial_y));
-
-    let mut progress_was_made = true;
-    while progress_was_made {
-        progress_was_made = false;
-        for y in 0..board.height {
-            for x in 0..board.width {
-                let Count(c) = state[y][x] else {
-                    continue;
-                };
-                let mut mines = 0;
-                let mut unknown = 0;
-
-                for dx in [-1_i32, 0, 1] {
-                    for dy in [-1_i32, 0, 1] {
-                        if dx == 0 && dy == 0 {
-                            continue;
-                        }
-                        let x = x.wrapping_add(dx as usize);
-                        let y = y.wrapping_add(dy as usize);
-                        if x >= board.width || y >= board.height {
-                            continue;
-                        }
-                        match state[y][x] {
-                            Unknown => unknown += 1,
-                            Mine => mines += 1,
-                            Count(_) => revealed += 1,
-                        }
-                    }
-                }
-                if unknown == 0 {
-                    continue;
-                }
-
-                let remaining_is_safe = c == mines;
-                let remaining_is_mines = c == unknown + mines;
-                if remaining_is_safe || remaining_is_mines {
-                    for dx in [-1_i32, 0, 1] {
-                        for dy in [-1_i32, 0, 1] {
-                            if dx == 0 && dy == 0 {
-                                continue;
-                            }
-                            let x = x.wrapping_add(dx as usize);
-                            let y = y.wrapping_add(dy as usize);
-                            if x >= board.width || y >= board.height {
-                                continue;
-                            }
-                            if state[y][x] == Unknown {
-                                state[y][x] =
-                                    Element::from_query(board.test(x, y, remaining_is_mines));
-                                progress_was_made = true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}*/

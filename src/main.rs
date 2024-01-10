@@ -6,9 +6,10 @@ struct GameBoard {
     width: usize,
     height: usize,
     remaining: usize,
+    display: bool,
 }
 impl GameBoard {
-    fn new(width: usize, height: usize, rng: Prng) -> Self {
+    fn new(width: usize, height: usize, rng: Prng, display: bool) -> Self {
         let mut rng = rng;
         let mines: Vec<Vec<bool>> = (0..height)
             .map(|_| (0..width).map(|_| rng.next() & 0b11111 <= 6).collect())
@@ -33,30 +34,31 @@ impl GameBoard {
                     .collect()
             })
             .collect();
-        let mut buffer = String::new();
-        write!(&mut buffer, "\x1b[0;0H").unwrap();
-        write!(&mut buffer, "+-").unwrap();
-        for _ in 0..width {
-            write!(&mut buffer, "--").unwrap();
-        }
-        write!(&mut buffer, "+\n").unwrap();
-
-        for _ in 0..height {
-            write!(&mut buffer, "| ").unwrap();
+        if display {
+            let mut buffer = String::new();
+            write!(&mut buffer, "\x1b[0;0H").unwrap();
+            write!(&mut buffer, "+-").unwrap();
             for _ in 0..width {
-                write!(&mut buffer, "  ").unwrap();
+                write!(&mut buffer, "--").unwrap();
             }
-            write!(&mut buffer, "|\n").unwrap();
+            write!(&mut buffer, "+\n").unwrap();
+
+            for _ in 0..height {
+                write!(&mut buffer, "| ").unwrap();
+                for _ in 0..width {
+                    write!(&mut buffer, "  ").unwrap();
+                }
+                write!(&mut buffer, "|\n").unwrap();
+            }
+
+            write!(&mut buffer, "+-").unwrap();
+            for _ in 0..width {
+                write!(&mut buffer, "--").unwrap();
+            }
+            write!(&mut buffer, "+\n").unwrap();
+
+            print!("{buffer}");
         }
-
-        write!(&mut buffer, "+-").unwrap();
-        for _ in 0..width {
-            write!(&mut buffer, "--").unwrap();
-        }
-        write!(&mut buffer, "+\n").unwrap();
-
-        print!("{buffer}");
-
         Self {
             mine: mines,
             count: counts,
@@ -64,12 +66,13 @@ impl GameBoard {
             width,
             height,
             remaining: width * height,
+            display,
         }
     }
     fn query(&mut self, x: usize, y: usize) -> Option<u8> {
         //std::thread::sleep(std::time::Duration::from_secs_f64(0.1));
         if !self.revealed[y][x] {
-            self.remaining -= 1; 
+            self.remaining -= 1;
             self.revealed[y][x] = true;
         }
         self.display(x, y);
@@ -97,45 +100,51 @@ impl GameBoard {
         }
     }
     fn display(&self, x: usize, y: usize) {
-        let mut buffer = String::new();
-        let mut color = Color(255, 255, 255);
-        write!(&mut buffer, "\x1b[{};{}H", y + 2, x * 2 + 2).unwrap();
-        if self.revealed[y][x] {
-            if self.mine[y][x] {
-                color.set(&mut buffer, Color(0, 255, 0)).unwrap();
-                write!(&mut buffer, "* ").unwrap();
-            } else {
-                if self.count[y][x] == 0 {
-                    color.set(&mut buffer, Color(255, 255, 255)).unwrap();
-                    write!(&mut buffer, "_ ").unwrap();
+        if self.display {
+            let mut buffer = String::new();
+            let mut color = Color(255, 255, 255);
+            write!(&mut buffer, "\x1b[{};{}H", y + 2, x * 2 + 2).unwrap();
+            if self.revealed[y][x] {
+                if self.mine[y][x] {
+                    color.set(&mut buffer, Color(0, 255, 0)).unwrap();
+                    write!(&mut buffer, "* ").unwrap();
                 } else {
-                    color
-                        .set(&mut buffer, Self::count_to_color(self.count[y][x]))
-                        .unwrap();
-                    write!(&mut buffer, "{} ", self.count[y][x]).unwrap();
+                    if self.count[y][x] == 0 {
+                        color.set(&mut buffer, Color(255, 255, 255)).unwrap();
+                        write!(&mut buffer, "_ ").unwrap();
+                    } else {
+                        color
+                            .set(&mut buffer, Self::count_to_color(self.count[y][x]))
+                            .unwrap();
+                        write!(&mut buffer, "{} ", self.count[y][x]).unwrap();
+                    }
                 }
             }
+            color.set(&mut buffer, Color(255, 255, 255)).unwrap();
+            print!("{buffer}\n");
+            self.reset_write_head();
         }
-        color.set(&mut buffer, Color(255, 255, 255)).unwrap();
-        print!("{buffer}\n");
-        self.reset_write_head();
     }
     fn draw(&self, x: usize, y: usize, s: String) {
-        println!("\x1b[{};{}H{s}", y + 2, x * 2 + 2);
-        self.reset_write_head();
+        if self.display {
+            println!("\x1b[{};{}H{s}", y + 2, x * 2 + 2);
+            self.reset_write_head();
+        }
     }
     fn reset_write_head(&self) {
-        println!("\x1b[{};{}H", self.height + 2, 0);
+        if self.display {
+            println!("\x1b[{};{}H", self.height + 2, 0);
+        }
     }
 
-    fn forall(&self) -> impl Iterator<Item = (usize, usize)>  {
+    fn forall(&self) -> impl Iterator<Item = (usize, usize)> {
         let height = self.height;
         let width = self.width;
         (0..height).flat_map(move |y| (0..width).map(move |x| (x, y)))
     }
 
     fn initial(&self) -> (usize, usize) {
-        for (x, y) in self.forall() {
+        for (x, y) in self.forall().skip(self.width) {
             if self.count[y][x] == 0 && !self.mine[y][x] {
                 return (x, y);
             }
@@ -214,15 +223,6 @@ use engine::play;
 
 fn main() {
     std::env::set_var("RUST_BACKTRACE", "1");
-    let board = GameBoard::new(40, 40, Prng(31417));
+    let board = GameBoard::new(230, 125, Prng(23841421), true);
     play(board);
-    // for i in 31416..31516 {
-    //     std::thread::sleep(std::time::Duration::from_secs_f64(0.4));
-    // }
-
-    // let mut board = GameBoard::new(40, 20, Prng(31415));
-    // for x in 10..15 {
-    //     board.query(x, 5);
-    // }
-    //println!("\x1b[31;1;4mHello\x1b[0m");
 }
